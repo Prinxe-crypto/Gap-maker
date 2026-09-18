@@ -1,9 +1,9 @@
 name: Run Reference Gap Paper Trading Bot
 
 on:
-  schedule:
-    - cron: '*/15 * * * *'
   workflow_dispatch:
+  repository_dispatch:
+    types: [run-bot]
 
 jobs:
   run-bot:
