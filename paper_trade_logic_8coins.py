@@ -1,17 +1,21 @@
 """
-Reference Gap Strategy — Dual-Direction Paper Trading Bot (with 100-Contract VWAP Depth Gate)
+Reference Gap Strategy — Dual-Direction Paper Trading Bot
 -------------------------------------------------------------------------------------------
+Version: v2_kalshi_ask_fix
 Each run (every ~15 min via scheduler):
 
-1. OPEN: For each asset, checks BOTH combo directions:
+1. MIGRATE: Runs one-time migration if legacy (v1) history exists without 'gate_version',
+   archiving legacy closed trades into 'closed_positions_v1_buggy.csv'.
+
+2. OPEN: For each asset, checks BOTH combo directions:
      Combo A: Kalshi-Down + Poly-Up
      Combo B: Kalshi-Up + Poly-Down
    Evaluates depth for 100 contracts on BOTH legs via order books.
-   If both legs fill 100 contracts under combined $0.80 VWAP, logs position.
+   If both legs fill 100 contracts under combined $0.80 VWAP, logs position tagged with gate_version.
 
-2. SETTLE: Checks any open positions whose window has closed, records outcome/profit.
+3. SETTLE: Checks any open positions whose window has closed, records outcome/profit.
 
-3. SUMMARY: Writes per-asset report to GitHub Step Summary.
+4. SUMMARY: Writes per-asset report to GitHub Step Summary (filtered exclusively for v2_kalshi_ask_fix).
 """
 
 import json
@@ -42,6 +46,8 @@ ASSETS = {
 
 OPEN_FILE = "open_positions.csv"
 CLOSED_FILE = "closed_positions.csv"
+GATE_VERSION = "v2_kalshi_ask_fix"
+LEGACY_CLOSED_FILE = "closed_positions_v1_buggy.csv"
 
 SESSION = requests.Session()
 SESSION.headers.update({"Accept": "application/json"})
@@ -83,6 +89,20 @@ def load_csv(path):
 
 def save_csv(df, path):
     df.to_csv(path, index=False)
+
+
+def migrate_legacy_history():
+    """One-time: move pre-fix history aside so it never mixes with v2 results."""
+    closed_df = load_csv(CLOSED_FILE)
+    if not closed_df.empty and "gate_version" not in closed_df.columns:
+        if not os.path.exists(LEGACY_CLOSED_FILE):
+            save_csv(closed_df, LEGACY_CLOSED_FILE)
+        save_csv(pd.DataFrame(columns=list(closed_df.columns) + ["gate_version"]), CLOSED_FILE)
+        print(f"Archived {len(closed_df)} pre-fix closed trades")
+    open_df = load_csv(OPEN_FILE)
+    if not open_df.empty and "gate_version" not in open_df.columns:
+        open_df["gate_version"] = "v1_buggy"
+        save_csv(open_df, OPEN_FILE)
 
 
 # ---------------- ORDER BOOK & VWAP CALCULATION ----------------
@@ -147,10 +167,7 @@ def get_polymarket_ask_vwap(token_id, target_shares=100):
         return False, 0.0
 
     asks_raw = data.get("asks", [])
-    # Format array into [[price, size], ...]
     asks = [[item.get("price"), item.get("size")] for item in asks_raw]
-    
-    # Sort asks by price ascending (cheapest asks first)
     asks.sort(key=lambda x: float(x[0]))
     
     return calculate_vwap(asks, target_shares)
@@ -268,6 +285,7 @@ def check_and_open_positions():
 
         if chosen_cost < ENTRY_THRESHOLD:
             new_rows.append({
+                "gate_version": GATE_VERSION,
                 "asset": asset,
                 "kalshi_ticker": kalshi["ticker"],
                 "poly_slug": poly["slug"],
@@ -398,7 +416,7 @@ def check_and_settle_positions():
     print(f"{len(remaining_df)} position(s) still open.")
 
 
-# ---------------- SUMMARY (per-asset, never mixed) ----------------
+# ---------------- SUMMARY (per-asset, filtered for v2_kalshi_ask_fix) ----------------
 
 def write_github_summary():
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
@@ -408,8 +426,13 @@ def write_github_summary():
     open_df = load_csv(OPEN_FILE)
     closed_df = load_csv(CLOSED_FILE)
 
+    if not closed_df.empty and "gate_version" in closed_df.columns:
+        closed_df = closed_df[closed_df["gate_version"] == GATE_VERSION]
+    if not open_df.empty and "gate_version" in open_df.columns:
+        open_df = open_df[open_df["gate_version"] == GATE_VERSION]
+
     lines = []
-    lines.append("# Reference Gap Bot — Dual-Direction (100-Contract Depth Gate) — Run Summary\n")
+    lines.append(f"# Reference Gap Bot — Dual-Direction ({GATE_VERSION}) — Run Summary\n")
     lines.append(f"**Run time:** {datetime.now(timezone.utc).isoformat()}\n")
 
     for asset in ASSETS.keys():
@@ -431,7 +454,7 @@ def write_github_summary():
         asset_closed = closed_df[closed_df["asset"] == asset] if not closed_df.empty else pd.DataFrame()
         lines.append(f"### Closed Positions — {asset}\n")
         if asset_closed.empty:
-            lines.append("_No trades settled yet._\n")
+            lines.append("_No closed trades yet under fixed pricing._\n")
         else:
             total = len(asset_closed)
             wins = (asset_closed["profit"] > 0).sum()
@@ -461,6 +484,7 @@ def write_github_summary():
 
 if __name__ == "__main__":
     print(f"=== Run started at {datetime.now(timezone.utc).isoformat()} ===\n")
+    migrate_legacy_history()
     print("--- Checking for new positions to open ---")
     check_and_open_positions()
     print("\n--- Checking for positions to settle ---")
