@@ -118,23 +118,23 @@ def calculate_vwap(asks, target_shares=100):
     return False, 0.0  # Not enough depth to fill 100 shares
 
 
+def _norm(levels):
+    out = []
+    for p, q in levels or []:
+        p, q = float(p), float(q)
+        if p > 1: p /= 100.0
+        out.append((p, q))
+    return out
+
+
 def get_kalshi_ask_vwap(ticker, side, target_shares=100):
-    """
-    Fetches Kalshi orderbook for a ticker and calculates ask VWAP for 'yes' or 'no'.
-    """
     data = get_json(f"{KALSHI_BASE}/markets/{ticker}/orderbook")
-    if not data or "orderbook" not in data:
-        return False, 0.0
-
-    ob = data.get("orderbook", {})
-    
-    if side == "yes":
-        # Buying YES requires filling 'yes' asks
-        asks = ob.get("yes", [])
-    else:
-        # Buying NO requires filling 'no' asks
-        asks = ob.get("no", [])
-
+    if not data: return False, 0.0
+    ob = data.get("orderbook_fp") or data.get("orderbook") or {}
+    yes_bids = _norm(ob.get("yes_dollars") or ob.get("yes"))
+    no_bids = _norm(ob.get("no_dollars") or ob.get("no"))
+    opposite = no_bids if side == "yes" else yes_bids   # buying YES lifts NO bids
+    asks = sorted((round(1.0 - p, 4), q) for p, q in opposite)
     return calculate_vwap(asks, target_shares)
 
 
