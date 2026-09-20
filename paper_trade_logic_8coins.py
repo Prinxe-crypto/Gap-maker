@@ -1,19 +1,17 @@
 """
-Reference Gap Strategy — Dual-Direction Paper Trading Bot
-------------------------------------------------------------
+Reference Gap Strategy — Dual-Direction Paper Trading Bot (with 100-Contract VWAP Depth Gate)
+-------------------------------------------------------------------------------------------
 Each run (every ~15 min via scheduler):
 
-1. OPEN: For BTC and ETH separately, checks BOTH combo directions:
+1. OPEN: For each asset, checks BOTH combo directions:
      Combo A: Kalshi-Down + Poly-Up
      Combo B: Kalshi-Up + Poly-Down
-   Takes whichever is cheaper. If under threshold, logs a SIMULATED
-   position (no real money, no real orders).
+   Evaluates depth for 100 contracts on BOTH legs via order books.
+   If both legs fill 100 contracts under combined $0.80 VWAP, logs position.
 
-2. SETTLE: Checks any open positions whose window has closed, records
-   the real outcome and simulated profit/loss.
+2. SETTLE: Checks any open positions whose window has closed, records outcome/profit.
 
-3. SUMMARY: Writes a per-asset (BTC and ETH kept fully separate) report
-   to GitHub's run summary page.
+3. SUMMARY: Writes per-asset report to GitHub Step Summary.
 """
 
 import json
@@ -29,6 +27,8 @@ GAMMA_BASE = "https://gamma-api.polymarket.com"
 CLOB_BASE = "https://clob.polymarket.com"
 
 ENTRY_THRESHOLD = 0.80
+TARGET_SHARES = 100  # Minimum depth size to fill
+
 ASSETS = {
     "BTC": {"kalshi_series": "KXBTC15M", "poly_prefix": "btc-updown-15m"},
     "ETH": {"kalshi_series": "KXETH15M", "poly_prefix": "eth-updown-15m"},
@@ -85,10 +85,81 @@ def save_csv(df, path):
     df.to_csv(path, index=False)
 
 
+# ---------------- ORDER BOOK & VWAP CALCULATION ----------------
+
+def calculate_vwap(asks, target_shares=100):
+    """
+    Calculates VWAP for buying target_shares from an order book ask array [[price, size], ...].
+    Returns (filled_bool, vwap_price).
+    """
+    if not asks:
+        return False, 0.0
+
+    accumulated_shares = 0
+    total_cost = 0.0
+
+    for level in asks:
+        try:
+            price = float(level[0])
+            size = float(level[1])
+        except (ValueError, IndexError, TypeError):
+            continue
+
+        needed = target_shares - accumulated_shares
+        fill_amount = min(needed, size)
+
+        total_cost += fill_amount * price
+        accumulated_shares += fill_amount
+
+        if accumulated_shares >= target_shares:
+            vwap = total_cost / target_shares
+            return True, round(vwap, 4)
+
+    return False, 0.0  # Not enough depth to fill 100 shares
+
+
+def get_kalshi_ask_vwap(ticker, side, target_shares=100):
+    """
+    Fetches Kalshi orderbook for a ticker and calculates ask VWAP for 'yes' or 'no'.
+    """
+    data = get_json(f"{KALSHI_BASE}/markets/{ticker}/orderbook")
+    if not data or "orderbook" not in data:
+        return False, 0.0
+
+    ob = data.get("orderbook", {})
+    
+    if side == "yes":
+        # Buying YES requires filling 'yes' asks
+        asks = ob.get("yes", [])
+    else:
+        # Buying NO requires filling 'no' asks
+        asks = ob.get("no", [])
+
+    return calculate_vwap(asks, target_shares)
+
+
+def get_polymarket_ask_vwap(token_id, target_shares=100):
+    """
+    Fetches Polymarket CLOB orderbook for a token ID and calculates ask VWAP.
+    """
+    data = get_json(f"{CLOB_BASE}/book", params={"token_id": token_id})
+    if not data or "asks" not in data:
+        return False, 0.0
+
+    asks_raw = data.get("asks", [])
+    # Format array into [[price, size], ...]
+    asks = [[item.get("price"), item.get("size")] for item in asks_raw]
+    
+    # Sort asks by price ascending (cheapest asks first)
+    asks.sort(key=lambda x: float(x[0]))
+    
+    return calculate_vwap(asks, target_shares)
+
+
 # ---------------- OPEN LOGIC ----------------
 
 def get_current_kalshi_market(series_ticker):
-    """Live Kalshi market: ticker, both Up ask and Down ask prices."""
+    """Live Kalshi market ticker & close_time."""
     data = get_json(f"{KALSHI_BASE}/markets", params={
         "series_ticker": series_ticker, "status": "open", "limit": 5
     })
@@ -99,21 +170,17 @@ def get_current_kalshi_market(series_ticker):
         return None
     m = markets[0]
     ticker = m.get("ticker")
-    up_ask = m.get("yes_ask_dollars")
-    down_ask = m.get("no_ask_dollars")
     close_time = m.get("close_time")
-    if ticker is None or up_ask is None or down_ask is None:
+    if not ticker:
         return None
     return {
         "ticker": ticker,
-        "up_ask": float(up_ask),
-        "down_ask": float(down_ask),
         "close_time": close_time,
     }
 
 
-def get_current_polymarket_prices(poly_prefix, window_start_dt):
-    """Live Polymarket event: slug, both Up ask and Down ask prices via CLOB."""
+def get_current_polymarket_info(poly_prefix, window_start_dt):
+    """Live Polymarket event: slug and token IDs for Up/Down."""
     ts = int(window_start_dt.timestamp())
     slug = f"{poly_prefix}-{ts}"
     data = get_json(f"{GAMMA_BASE}/events", params={"slug": slug})
@@ -139,16 +206,14 @@ def get_current_polymarket_prices(poly_prefix, window_start_dt):
     except (ValueError, TypeError):
         return None
 
-    prices = {}
+    tokens = {}
     for name, tid in zip(outcomes, token_ids):
-        price_data = get_json(f"{CLOB_BASE}/price", params={"token_id": tid, "side": "BUY"})
-        if price_data and "price" in price_data:
-            prices[name.lower()] = float(price_data["price"])
+        tokens[name.lower()] = tid
 
-    if "up" not in prices or "down" not in prices:
+    if "up" not in tokens or "down" not in tokens:
         return None
 
-    return {"slug": slug, "up_ask": prices["up"], "down_ask": prices["down"]}
+    return {"slug": slug, "up_token": tokens["up"], "down_token": tokens["down"]}
 
 
 def check_and_open_positions():
@@ -173,21 +238,33 @@ def check_and_open_positions():
             print(f"[{asset}] {kalshi['ticker']} already logged, skipping")
             continue
 
-        poly = get_current_polymarket_prices(cfg["poly_prefix"], window_start)
+        poly = get_current_polymarket_info(cfg["poly_prefix"], window_start)
         if not poly:
-            print(f"[{asset}] no matching Polymarket prices found, skipping")
+            print(f"[{asset}] no matching Polymarket tokens found, skipping")
             continue
 
-        cost_a = round(kalshi["down_ask"] + poly["up_ask"], 4)   # Kalshi-Down + Poly-Up
-        cost_b = round(kalshi["up_ask"] + poly["down_ask"], 4)   # Kalshi-Up + Poly-Down
+        # Evaluate Combo A: Kalshi-Down + Poly-Up for 100 contracts
+        k_down_ok, k_down_vwap = get_kalshi_ask_vwap(kalshi["ticker"], side="no", target_shares=TARGET_SHARES)
+        p_up_ok, p_up_vwap = get_polymarket_ask_vwap(poly["up_token"], target_shares=TARGET_SHARES)
+        
+        cost_a = round(k_down_vwap + p_up_vwap, 4) if (k_down_ok and p_up_ok) else 999.0
+
+        # Evaluate Combo B: Kalshi-Up + Poly-Down for 100 contracts
+        k_up_ok, k_up_vwap = get_kalshi_ask_vwap(kalshi["ticker"], side="yes", target_shares=TARGET_SHARES)
+        p_down_ok, p_down_vwap = get_polymarket_ask_vwap(poly["down_token"], target_shares=TARGET_SHARES)
+
+        cost_b = round(k_up_vwap + p_down_vwap, 4) if (k_up_ok and p_down_ok) else 999.0
+
+        if cost_a == 999.0 and cost_b == 999.0:
+            print(f"[{asset}] {kalshi['ticker']}: Insufficient order book depth (<{TARGET_SHARES} contracts) on both combos, skipping")
+            continue
 
         if cost_a <= cost_b:
             direction, chosen_cost = "A", cost_a
         else:
             direction, chosen_cost = "B", cost_b
 
-        print(f"[{asset}] {kalshi['ticker']}: cost_A(Down+Up)=${cost_a}, "
-              f"cost_B(Up+Down)=${cost_b} -> chose {direction} (${chosen_cost})")
+        print(f"[{asset}] {kalshi['ticker']}: Combo A VWAP=${cost_a}, Combo B VWAP=${cost_b} -> chose {direction} (${chosen_cost})")
 
         if chosen_cost < ENTRY_THRESHOLD:
             new_rows.append({
@@ -198,13 +275,13 @@ def check_and_open_positions():
                 "window_start": window_start.isoformat(),
                 "close_time": kalshi["close_time"],
                 "combined_cost": chosen_cost,
-                "cost_a": cost_a,
-                "cost_b": cost_b,
+                "cost_a": cost_a if cost_a != 999.0 else None,
+                "cost_b": cost_b if cost_b != 999.0 else None,
                 "logged_at": now.isoformat(),
             })
-            print(f"  -> OPENED (direction {direction}, cost ${chosen_cost} < ${ENTRY_THRESHOLD})")
+            print(f"  -> OPENED (direction {direction}, 100-contract VWAP ${chosen_cost} < ${ENTRY_THRESHOLD})")
         else:
-            print(f"  -> skipped (best cost ${chosen_cost} >= ${ENTRY_THRESHOLD})")
+            print(f"  -> skipped (best 100-contract VWAP ${chosen_cost} >= ${ENTRY_THRESHOLD})")
 
     if new_rows:
         new_df = pd.DataFrame(new_rows)
@@ -332,7 +409,7 @@ def write_github_summary():
     closed_df = load_csv(CLOSED_FILE)
 
     lines = []
-    lines.append("# Reference Gap Bot — Dual-Direction — Run Summary\n")
+    lines.append("# Reference Gap Bot — Dual-Direction (100-Contract Depth Gate) — Run Summary\n")
     lines.append(f"**Run time:** {datetime.now(timezone.utc).isoformat()}\n")
 
     for asset in ASSETS.keys():
@@ -344,7 +421,7 @@ def write_github_summary():
             lines.append("_None currently open._\n")
         else:
             lines.append(f"**Count: {len(asset_open)}**\n")
-            lines.append("| Ticker | Direction | Combined Cost | Window Start |")
+            lines.append("| Ticker | Direction | 100-Contract VWAP Cost | Window Start |")
             lines.append("|---|---|---|---|")
             for _, r in asset_open.iterrows():
                 lines.append(f"| {r['kalshi_ticker']} | {r['direction']} | "
@@ -370,7 +447,7 @@ def write_github_summary():
             lines.append(f"**Average entry cost: ${avg_entry_cost:.4f}**\n")
 
             lines.append(f"#### Last 10 settled trades — {asset}\n")
-            lines.append("| Ticker | Dir | Kalshi | Poly | Cost | Payout | Profit |")
+            lines.append("| Ticker | Dir | Kalshi | Poly | VWAP Cost | Payout | Profit |")
             lines.append("|---|---|---|---|---|---|---|")
             for _, r in asset_closed.tail(10).iloc[::-1].iterrows():
                 lines.append(f"| {r['kalshi_ticker']} | {r['direction']} | "
