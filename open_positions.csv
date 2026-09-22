@@ -1,2 +1,1 @@
 gate_version,asset,kalshi_ticker,poly_slug,direction,window_start,close_time,combined_cost,cost_a,cost_b,logged_at
-v2_kalshi_ask_fix,HYPE,KXHYPE15M-26SEP220115-15,hype-updown-15m-1790053200,A,2026-09-22T05:00:00+00:00,2026-09-22T05:15:00Z,0.6935,0.6935,1.6444,2026-09-22T05:14:14.982659+00:00
