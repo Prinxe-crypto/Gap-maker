@@ -1,1 +1,2 @@
 gate_version,asset,kalshi_ticker,poly_slug,direction,window_start,close_time,combined_cost,cost_a,cost_b,logged_at
+v2_kalshi_ask_fix,BTC,KXBTC15M-26SEP261015-15,btc-updown-15m-1790431200,B,2026-09-26T14:00:00+00:00,2026-09-26T14:15:00Z,0.7822,1.2457,0.7822,2026-09-26T14:06:19.564995+00:00
