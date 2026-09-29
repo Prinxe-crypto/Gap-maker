@@ -1,1 +1,2 @@
 gate_version,asset,kalshi_ticker,poly_slug,direction,window_start,close_time,combined_cost,cost_a,cost_b,logged_at
+v2_kalshi_ask_fix,ETH,KXETH15M-26SEP291645-45,eth-updown-15m-1790713800,B,2026-09-29T20:30:00+00:00,2026-09-29T20:45:00Z,0.6762,1.3876,0.6762,2026-09-29T20:44:19.767034+00:00
