@@ -1,2 +1,1 @@
 gate_version,asset,kalshi_ticker,poly_slug,direction,window_start,close_time,combined_cost,cost_a,cost_b,logged_at
-v2_kalshi_ask_fix,DOGE,KXDOGE15M-26SEP301745-45,doge-updown-15m-1790803800,B,2026-09-30T21:30:00+00:00,2026-09-30T21:45:00Z,0.7644,1.5605,0.7644,2026-09-30T21:44:18.607804+00:00
