@@ -1,2 +1,1 @@
 gate_version,asset,kalshi_ticker,poly_slug,direction,window_start,close_time,combined_cost,cost_a,cost_b,logged_at
-v2_kalshi_ask_fix,XRP,KXXRP15M-26OCT022315-15,xrp-updown-15m-1790996400,B,2026-10-03T03:00:00+00:00,2026-10-03T03:15:00Z,0.3039,1.8256,0.3039,2026-10-03T03:14:17.824278+00:00
