@@ -1,1 +1,2 @@
 gate_version,asset,kalshi_ticker,poly_slug,direction,window_start,close_time,combined_cost,cost_a,cost_b,logged_at
+v2_kalshi_ask_fix,SOL,KXSOL15M-26OCT040215-15,sol-updown-15m-1791093600,A,2026-10-04T06:00:00+00:00,2026-10-04T06:15:00Z,0.017,0.017,,2026-10-04T06:14:52.144011+00:00
