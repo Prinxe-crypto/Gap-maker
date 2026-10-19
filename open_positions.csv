@@ -1,1 +1,2 @@
 gate_version,asset,kalshi_ticker,poly_slug,direction,window_start,close_time,combined_cost,cost_a,cost_b,logged_at
+v2_kalshi_ask_fix,BNB,KXBNB15M-26OCT190515-15,bnb-updown-15m-1792400400,B,2026-10-19T09:00:00+00:00,2026-10-19T09:15:00Z,0.7979,,0.7979,2026-10-19T09:14:21.256637+00:00
