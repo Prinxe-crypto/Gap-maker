@@ -1,3 +1,2 @@
 gate_version,asset,kalshi_ticker,poly_slug,direction,window_start,close_time,combined_cost,cost_a,cost_b,logged_at
-v2_kalshi_ask_fix,DOGE,KXDOGE15M-26OCT201945-45,doge-updown-15m-1792539000,B,2026-10-20T23:30:00+00:00,2026-10-20T23:45:00Z,0.1761,,0.1761,2026-10-20T23:44:24.159850+00:00
 v2_kalshi_ask_fix,HYPE,KXHYPE15M-26OCT201945-45,hype-updown-15m-1792539000,B,2026-10-20T23:30:00+00:00,2026-10-20T23:45:00Z,0.736,1.8017,0.736,2026-10-20T23:44:24.159850+00:00
